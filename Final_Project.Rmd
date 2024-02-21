@@ -1,0 +1,652 @@
+---
+title: "Final Project"
+author: "Group 24: Zachary Biery & Will Stautberg"
+date: "2023-12-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##  {.tabset .tabset-pills}
+
+### Introduction
+
+Regork is a company that has been successful in the grocery sector for countless years. However, they are now looking to expand their business into the telecommunications market. They would like to offer their customers internet/phone service, streaming, and other similar features. Using data Regork obtained from their customers, our goal is to uncover a model that can best predict when customers will leave the company.
+
+In this project, we will build several machine learning models for Regork that all aim to determine customer retention. Specifically, we will examine a logistic regression model, a multivariate adaptive regression splines (MARS) model, a decision tree, bagging decision trees, and a random forest. In order to uncover which model is the best for Regork to use, we will be using the area under the curve measurement.
+
+### Prerequisites
+
+#### **Libraries**
+
+A variety of libraries will be used to assist in the formulation of our initial analysis as well as the synthesis of various machine learning models.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)    #Data cleaning, manipulation, visualization
+library(tidymodels)   #Creating machine learning models
+library(vip)          #Constructing variable importance plots
+library(earth)        #Creating MARS models
+library(baguette)     #Creating bagged tree models
+library(ranger)       #Creating Random Forest models
+```
+
+#### **Importing Data**
+
+We will be analyzing a data set containing customer retention information. The information is provided in the form of a csv flat file, which we will first need to import in order to conduct our analysis. This data set contains information pertaining to 7000 customers.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+#Grab file path to data file
+path <- here::here("data", "customer_retention.csv")
+
+#Import data file
+retention <- readr::read_csv(path)
+
+```
+
+#### **Prepping & Splitting Data**
+
+For our purposes, we will omit null values as they may bias the results of our machine learning models or decrease the accuracy of them.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#Recode response variable as a factor
+retention <- mutate(retention, Status = as.factor(Status))
+
+#Remove null values
+retention <- na.omit(retention)
+
+```
+
+In order to build our machine learning models later, we must split the data into a set to train our model and a set to test our model's performance. We will be using a 70-30 train-test split in order to optimize the generalizability our of models.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#For reproducibility
+set.seed(123)
+
+#70-30 train-test split
+split <- initial_split(retention, prop = 0.7, strata = "Status")
+train <- training(split)
+test <- testing(split)
+```
+
+### Exploratory Data Analysis (EDA)
+
+Before beginning to build our machine learning models, it is important that we understand some of the underlying trends and relationships in our data.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#payment by account status
+retention %>%
+  group_by(PaymentMethod, Status) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = PaymentMethod, y = count, fill = Status)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(title = "Customer Payment Method by Account Status",
+         x = "Payment Method",
+         y = "Number of Customers") +
+    scale_fill_manual(values = c("dodgerblue","orange2")) +
+    theme_minimal()
+```
+
+Here we see that bank transfers, credit cards, and mailed checks have very similar relationships. The outlier, however, are the electronic checks. Customers that use electronic checks are clearly more likely to leave, and thus, the tenure for this population is shorter.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#proportion of total customers by payment status
+proportions <- retention %>%
+  group_by(PaymentMethod) %>%
+  summarize(count = n()) %>%
+  mutate(proportion = count / sum(count))
+
+ggplot(proportions, aes(x = PaymentMethod, y = proportion)) +
+  geom_bar(stat = "identity", fill = "gray") +
+    labs(title = "Proportion of Customers by Payment Method",
+         x = "Payment Method",
+         y = "Proportion of Customers") +
+    theme_minimal()
+
+```
+
+Similar to the prior graph, bank transfers, credit cards, and mailed checks make up roughly the same proportion of customers by payment status. Electronic checks make up nearly a third of the total customer base, and knowing they are most likely to leave, Regork should take that into heavy consideration.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#customers that left by tenure
+retention %>%
+  filter(Status == "Left") %>%
+    group_by(Tenure) %>%
+    summarise(count = n()) %>%
+    ggplot(aes(x = Tenure, y = count)) +
+    geom_line() +
+    geom_point() +
+  labs(title = "Tenure of Customers Who Left",
+         x = "Tenure (Months)",
+         y = "Number of Customers") +
+  theme_minimal()
+```
+
+Customers that can make it over the initial hump in their first months of being a customer of Regork tend to stay with the company for a long period of time. We can see a clear decline in people leaving just after the initial data point, so targeting this initial departure could be something of use for Regork.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#customers by contract type
+retention %>%
+    ggplot(aes(x = Contract, fill = Status)) +
+    geom_bar(position = "dodge") +
+  labs(title = "Customers by Contract Type",
+         x = "Payment Method",
+         y = "Proportion of Customers") +
+  scale_fill_manual(values = c("dodgerblue","orange2")) +
+  theme_minimal()
+```
+
+As suspected, when breaking down the data into contract type, month-to-month contracts are the most frequent leavers. This lines up with what we demonstrated in our prior graph that shows a steep decline in leavers after the initial period.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+ggplot(retention, aes(x = InternetService, fill = Status)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Distribution of Internet Service Provider by Customer Status", 
+      x = "Internet Service", 
+      y = "Number of Customers") +
+  scale_fill_manual(values = c("dodgerblue","orange2")) +
+  theme_minimal()
+
+```
+Customers that have fiber optic service are much more likely to leave than any other customers although nearly a third of Regork's customers opted for fiber optic.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+retention %>%
+  ggplot(aes(x = MonthlyCharges, y = TotalCharges, color = Status)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Monthly Charges vs. Total Charges by Customer Status",
+    x = "Monthly Charges",
+    y = "Total Charges") +
+  scale_color_manual(values = c("Current" = "dodgerblue", "Left" = "orange")) + 
+  scale_x_continuous(labels = scales::dollar_format()) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() 
+```
+
+Higher monthly charges tend to have a greater affect on customers leaving than do higher total charges. In fact, current customers consistently have higher total charges than do customers who've left. This is likely a result of current customers having a longer tenure with Regork, and thus high total charges. 
+
+### Machine Learning
+
+The problem that we are looking to solve is a classification problem. To assess the performance of our models we will be looking at the AUC.
+
+Before we began building any models, we created a recipe to normalize our numeric predictors to provide a common comparable unit of measure across all of our variables, and we dummy encoded our nominal predictors (categorical variables) to ensure they take on a numeric form.
+
+##### **Recipe**
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+recipe <- recipe(Status ~ ., data = train) %>%
+    step_normalize(all_numeric_predictors()) %>%
+    step_dummy(all_nominal_predictors())
+```
+
+####  {.tabset .tabset-pills}
+
+##### Logistic Regression
+
+Our first machine learning model we created was a logistic regression model. To keep results comparable to one another, we will base all measurements off of the mean AUC. We also decided to use a 5-fold cross validation to assess the model's performance. This model was ran on all predictor variables to determine the response variable (Status).
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(123)
+
+lr_kfold <- vfold_cv(train, v = 5, strata = Status)
+
+lr_results <- logistic_reg() %>%
+  fit_resamples(Status ~ ., lr_kfold)
+
+#mean AUC
+collect_metrics(lr_results) %>% filter(.metric == "roc_auc")
+
+#AUC across all folds
+collect_metrics(lr_results, summarize = FALSE) %>% filter(.metric == "roc_auc")
+```
+
+Based off our mean AUC from our 5 fold resampling procedure, our regularized logistic regression model is accurate nearly 85% of the time when making predictions about a customer attriting.
+
+When we look at each of our 5 folds, we see that our best model was predicting accurately 86.4% of the time, with the worst model's accuracy at 83.6%.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+lr_final <- logistic_reg() %>%
+  fit(Status ~ ., data = train)
+
+lr_final %>%
+  predict(test) %>%
+  bind_cols(test %>% select(Status)) %>%
+  conf_mat(truth = Status, estimate = .pred_class)
+```
+
+As we can see from our confusion matrix, our logistic regression model is more prone to return false negatives than it is to return false positives. Considering we are attempting to predict customer retention, false positives are likely preferred as it allows Regork to take action to prevent a customer from leaving before it even occurs.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+vip(lr_final$fit, num_features = 10)
+```
+
+Tenure, contract length, and total charges are among the most influential variables affecting customer retention according to our logistic regression model.
+
+###### **Hyperparameter Tuning**
+
+While our out the box logistic regression model performed fairly well, we though we may be able to increase the AUC by performing some hyperparameter tuning.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+lr_hyper <- logistic_reg(mixture = tune(), penalty = tune()) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+lr_grid <- grid_regular(mixture(), penalty(), levels = 10)
+
+lr_wf <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(lr_hyper)
+
+lr_tuning_results <- lr_wf %>%
+  tune_grid(resamples = lr_kfold, grid = lr_grid)
+
+lr_tuning_results %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  arrange(desc(mean)) %>%
+  print(n = 5)
+
+#autoplot(lr_tuning_results)
+
+```
+
+Our hyperparameter tuning has increased our AUC; however, the effect is only marginal.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+lr_best_hyper <- select_best(lr_tuning_results, metric = "roc_auc")
+
+lr_final_wf <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(lr_hyper) %>%
+  finalize_workflow(lr_best_hyper)
+
+lr_hyper_final <- lr_final_wf %>%
+  fit(data = train)
+
+lr_hyper_final %>%
+  predict(test) %>%
+  bind_cols(test %>% select(Status)) %>%
+  conf_mat(truth = Status, estimate = .pred_class)
+```
+
+Tuning our model affected our confusion matrix only slightly as well.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+lr_hyper_final %>%
+  extract_fit_parsnip() %>%
+  vip(10)
+```
+
+As was the case before the hyperparameter tuning, tenure, contract length, and total charges are the most influential variables in predicting customer Status.
+
+##### MARS
+
+The next model we will explore is the MARS model. Again, we use a 5-fold cross validation process in the model, as well as create a tuning grid that we can train our model on.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# create MARS model object
+mars <- mars(mode = "classification", num_terms = tune(), prod_degree = tune())
+
+#create resampling procedure
+set.seed(123)
+mars_kfold <- vfold_cv(train, v = 5)
+
+# create a hyper parameter tuning grid
+mars_grid <- grid_regular(
+ num_terms(range = c(1, 100)), 
+ prod_degree(),
+ levels = 25
+ )
+
+# train our model across the hyper parameter grid
+mars_results <- tune_grid(mars, recipe, resamples = mars_kfold, grid = mars_grid)
+
+# get best results
+show_best(mars_results, metric = "roc_auc")
+
+```
+
+The AUC value of 0.847 is slightly better than what we uncovered in any of the logistic regression models. This value means that this model is at a near 85% accuracy rate in predicting the customer's status with Regork.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+mars_best_hyperparameters <- select_best(mars_results, metric = "roc_auc")
+
+mars_final_wf <- workflow() %>%
+  add_model(mars) %>%
+  add_recipe(recipe) %>%
+  finalize_workflow(mars_best_hyperparameters)
+
+mars_final_fit <- mars_final_wf %>%
+  fit(data = train)
+
+mars_final_fit %>%
+  predict(test) %>%
+  bind_cols(test %>% select(Status)) %>%
+  conf_mat(truth = Status, estimate = .pred_class)
+
+```
+
+Similar to the logistic regression model, the confusion matrix above states that our model is more likely to have false negatives than anything else. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+mars_final_wf %>%
+   fit(data = train) %>% 
+   extract_fit_parsnip() %>%
+   vip(10, type = "rss")
+```
+
+Tenure was once again the most important predictor variable; however, instead of contract length being highly predictive, total charges and monthly charges are the second and third most influential variables when dealing with customer retention.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+mars_final_fit %>% 
+  predict(test, type = "prob") %>%
+  mutate(truth = test$Status) %>%
+  roc_auc(truth, .pred_Current)
+
+```
+Our model generalized well to the test data, with an incredibly small difference to the cross validation error observed earlier. 
+
+##### Decision Tree
+
+Another model we decided to look at were decision trees. This model uses the CART method to partition data to find feature and split combinations that will best predict the outcome of our model.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+dt <- decision_tree(mode = "classification") %>%
+  set_engine("rpart")
+
+# Step 3: fit model workflow
+dt_fit <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(dt) %>%
+  fit(data = train)
+
+# create resampling procedure
+set.seed(123)
+dt_kfold <- vfold_cv(train, v = 5)
+
+# train model
+dt_results <- fit_resamples(dt, recipe, dt_kfold)
+
+# model results
+collect_metrics(dt_results)
+
+```
+
+Our AUC is considerably lower than it is using a MARS or logistic regression model.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+rpart.plot::rpart.plot(dt_fit$fit$fit$fit)
+```
+
+There are only 3 levels to this tree, so it is very well possible that our model performance could be increased by tuning.
+
+###### **Hyperparameter Tuning**
+
+We decided to do hyperparameter tuning with this model to create more levels in our model, and in turn, hopefully elevate our AUC measure. This tuning will make the model slightly more complex and create a better model with low bias and low variance.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#hyperparamater tuning
+dt_hyper <- decision_tree(
+  mode = "classification",
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune()
+  ) %>%
+  set_engine("rpart")
+
+# create the hyperparameter grid
+dt_hyper_grid <- grid_regular(
+  cost_complexity(),
+  tree_depth(),
+  min_n(),
+  levels = 5
+  )
+
+# train our model across the hyper parameter grid
+set.seed(123)
+dt_hyper_results <- tune_grid(dt_hyper, 
+                             recipe, 
+                             resamples = dt_kfold, 
+                             grid = dt_hyper_grid)
+
+# get best results
+show_best(dt_hyper_results, metric = "roc_auc", n = 5)
+
+```
+
+Tuning our decision tree increased our model's accuracy by about 12%, from 70% without tuning to 82% with hyperparameter tuning.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# get best hyperparameter values
+dt_best_model <- select_best(dt_hyper_results, metric = 'roc_auc')
+
+# put together final workflow
+dt_final_wf <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(dt_hyper) %>%
+  finalize_workflow(dt_best_model)
+
+# fit final workflow across entire training data
+dt_final_fit <- dt_final_wf %>%
+  fit(data = train)
+
+rpart.plot::rpart.plot(dt_final_fit$fit$fit$fit)
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# confusion matrix
+dt_final_fit %>%
+   predict(test) %>%
+   bind_cols(test %>% select(Status)) %>%
+   conf_mat(truth = Status, estimate = .pred_class)
+```
+
+As was the case with prior models, false negatives are most likely to appear while using this model.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# plot feature importance
+dt_final_fit %>%
+  extract_fit_parsnip() %>%
+  vip(10)
+```
+
+When tuning this model, Total Charges becomes the most influential predictor variable. Tenure, which was the most influential, is now a close second. Monthly Charges is still in third, but by a sizable margin. Since the AUC is higher for this model, we can assume that, in a decision tree model, Total Chargers is the most influential variable.
+
+##### Bagging
+
+We created a bagged CART model with 5 bagged trees. We will start by running this model without any hyperparameter tuning to see where the model stands. This bagging model aims to fit multiple versions of the prediction model, and it will take these multiple versions and create an aggregated prediction that best predicts our outcome.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# create resampling procedure
+set.seed(123)
+bag_kfold <- vfold_cv(train, v = 5)
+
+# create bagged CART model object with 5 bagged trees
+bag_mod <- bag_tree() %>%
+  set_engine("rpart", times = 5) %>%
+  set_mode("classification")
+
+# train model
+bag_results <- fit_resamples(bag_mod, recipe, bag_kfold)
+
+# model results
+collect_metrics(bag_results)
+```
+
+Our out of the box AUC for the CART bagged tree model is higher than it was for our decision tree without tuning, but lower than that of our MARS and logistic regression models. With hyperparamter tuning, we expect to see the AUC rise.
+
+###### **Hyperparameter Tuning**
+
+Now, we will again tune our model in hopes of creating a model with a higher AUC.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+bag_hyper <- bag_tree() %>%
+  set_engine("rpart", times = tune()) %>%
+  set_mode("classification")
+
+# create the hyperparameter grid
+bag_hyper_grid <- expand.grid(times = c(5, 25, 50, 100, 200, 300))
+
+# train our model across the hyper parameter grid
+set.seed(123)
+bag_hyper_results <- tune_grid(bag_hyper, recipe, resamples = bag_kfold, grid = bag_hyper_grid)
+
+# model results
+show_best(bag_hyper_results, metric = "roc_auc", n = 5)
+```
+
+As expected, our AUC goes above 80%, but it is still not as good as our prior models with an accuracy rate of about 82%.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# identify best model
+bag_best_hyperparameters <- bag_hyper_results %>%
+   select_best("roc_auc")
+
+# finalize workflow object
+bag_final_wf <- workflow() %>%
+   add_recipe(recipe) %>%
+   add_model(bag_hyper) %>%
+   finalize_workflow(bag_best_hyperparameters)
+
+# final fit on training data
+bag_final_fit <- bag_final_wf %>%
+   fit(data = train)
+
+# confusion matrix
+bag_final_fit %>%
+   predict(test) %>%
+   bind_cols(test %>% select(Status)) %>%
+   conf_mat(truth = Status, estimate = .pred_class)
+```
+
+This model is still more prone to false negatives.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+bag_vip <- bag_final_fit %>%
+   extract_fit_parsnip() %>%
+   .[['fit']] %>%
+   var_imp() %>%
+   slice(1:10)
+
+ggplot(bag_vip, aes(value, reorder(term, value))) +
+   geom_col() +
+   ylab(NULL) +
+   xlab("Feature importance")
+```
+
+The most important features for our CART bagged model are consistent with those we found to be most important in our decision tree model.
+
+##### Random Forest
+
+The final model we created is a random forest. We were hoping that this model would improve from our bagging model as it builds de-correlated trees.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# create resampling procedure
+set.seed(123)
+rf_kfold <- vfold_cv(train, v = 5)
+
+# create random forest object
+rf_mod <- rand_forest(mode = "classification") %>%
+  set_engine("ranger")
+
+# train model
+rf_results <- fit_resamples(rf_mod, recipe, rf_kfold)
+
+# model results
+collect_metrics(rf_results)
+```
+
+Our random forest model's performance is on par with our best models even without tuning.
+
+###### **Hyperparamter Tuning**
+
+We will again tune our model to create the best predictor model possible for our random forest.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# create random forest model object with tuning option
+rf_hyper <- rand_forest(
+  mode = "classification",
+  trees = tune(),
+  mtry = tune(),
+  min_n = tune()
+) %>%
+  set_engine("ranger", importance = "impurity")
+
+# create the hyperparameter grid
+rf_hyper_grid <- grid_regular(
+  trees(range = c(50, 800)),
+  mtry(range = c(2, 30)),
+  min_n(range = c(1, 20)),
+  levels = 5
+)
+
+# train our model across the hyper parameter grid
+set.seed(123)
+rf_hyper_results <- tune_grid(rf_hyper, recipe, resamples = rf_kfold, grid = rf_hyper_grid)
+
+# model results
+show_best(rf_hyper_results, metric = "roc_auc")
+
+```
+
+The best AUC contained 612 trees and has an accuracy rate of just over 84%. This is very similar (albeit slightly smaller) than our logistic regression and MARS models.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# get optimal hyperparameters
+rf_best_hyperparameters <- select_best(rf_hyper_results, metric = "roc_auc")
+
+# create final workflow object
+final_rf_wf <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(rf_hyper) %>%
+  finalize_workflow(rf_best_hyperparameters)
+
+# fit final workflow object
+rf_final_fit <- final_rf_wf %>%
+  fit(data = train)
+
+# confusion matrix
+rf_final_fit %>%
+   predict(test) %>%
+   bind_cols(test %>% select(Status)) %>%
+   conf_mat(truth = Status, estimate = .pred_class)
+
+```
+
+False negatives are still prone to appear in this model.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# plot feature importance
+rf_final_fit %>%
+  extract_fit_parsnip() %>%
+  vip(num_features = 10)
+```
+
+In the best version of our random forest model, Tenure is the most important predictor variable by a fair amount, followed by Total Charges and Monthly Charges. These are the three clear most influential as there is a stark drop off after these three variables.
+
+### Conclusions
+
+**Optimal Model**
+
+Upon creating 5 machine learning models, we had multiple models that correctly predicted the result of a customer leaving at a clip between 84-85%. The most optimal model, however, was the multivariate adaptive regression splines (MARS) model that predicted our outcomes with an 84.7% accuracy rate.
+
+This model also generalized well to the test data, with the generalization error (0.84709) being almost identical to the cross validation error (0.84734). 
+
+The most important predictor variables for our MARS model were Tenure, Total Charges, and Monthly Charges. 
+
+**Important Predictor Variables & Implications**
+
+Across all of our high performance models, there was some commonality among the predictor variables that were most influential. On our three top models, Tenure was found to be the most influential predictor variable. Tenure being influential makes logical sense. When a customer stays loyal to a company for a longer amount of time, the less likely they are to leave (see the exploratory data graphs). As this is the best predictor of customer retention, management at Regork needs to hone in on this. Offering incentives for the first year for customers could have a large impact as customers are much less likely to leave after a year of sticking with Regork.
+
+Also important from our analysis, Total Charges and Monthly charges were good predictors of our response variable. In other words, the amount the customer is charged on a monthly and totality basis is important for retention. As a new line of business opens for Regork, it is important to think about market disruptors. They will likely not have a monumental market share if they come in offering equal to or more than their competition, so utilizing a pricing strategy beneficial for new customers would be helpful for retention.
+
+The last variable to discuss is Contract Length. From the start, we were able to see that customer that choose the month-to-month contract are more susceptible to leaving Regork. Contracts of the one or two year variety provide much better retention rates. Something that management could implement is a pricing strategy that convinces people to opt for the longer duration contract as it will in turn give them a better chance of sticking with Regork as a telecommunication provider.
+
+**Limitations**
+
+The data which we were provided is limited, with only around 7000 observations. While this is a decent sample size, having more data to work off of could have improved our models' predictive accuracy. Additionally, our team could have devoted more time to play around with hyperparameter values or at least the ranges of values to be tuned in order to truly refine our models. 
