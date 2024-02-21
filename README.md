@@ -1,7 +1,7 @@
 # Customer-Retention-Supervised-Learning
 ### This repo contains files related to a Final Project completed for BANA 4080 (Data Mining) at the University of Cincinnati
 
-In this project various supervised machine learning binary classification models were used to predict the 
+In this project, various supervised learning binary classification models were used to predict the 
 retention of customers for a Telecommunication company. The data file (customer_retention.csv) used to train 
 these models consists of 7000 observations containing 19 features (predictor variables):
 
@@ -24,6 +24,7 @@ these models consists of 7000 observations containing 19 features (predictor var
 * PaymentMethod: The customer’s payment method (Electronic check, Mailed check, Bank transfer (automatic), Credit card (automatic))
 * MonthlyCharges: The amount charged to the customer monthly
 * TotalCharges: The total amount charged to the customer
+
 The target (response variable) in the data set is Status, which indicates if a customer is current or left their plan.
 
 Logistic Regression, Multivariate Adaptive Regression Splines (MARS), Decision Tree, Bagged Tree, and 
