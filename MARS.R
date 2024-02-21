@@ -2,8 +2,6 @@ library(tidyverse)    #Data cleaning, manipulation, visualization
 library(tidymodels)   #Creating machine learning models
 library(vip)          #Constructing variable importance plots
 library(earth)        #Creating MARS models
-library(baguette)     #Creating bagged tree models
-library(ranger)       #Creating Random Forest models
 
 #Grab file path to data file
 path <- here::here("data", "customer_retention.csv")
