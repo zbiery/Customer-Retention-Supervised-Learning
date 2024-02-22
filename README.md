@@ -2,7 +2,7 @@
 ### This repo contains files related to a Final Project completed for BANA 4080 (Data Mining) at the University of Cincinnati
 
 In this project, various supervised learning binary classification models were used to predict the 
-retention of customers for a Telecommunication company. The data file (customer_retention.csv) used to train 
+retention of customers for a telecommunications company. The data file (customer_retention.csv) used to train 
 these models consists of 7000 observations containing 19 features (predictor variables):
 
 * Gender: Whether the customer is a male or a female
